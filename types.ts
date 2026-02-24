@@ -56,9 +56,17 @@ export interface Analytics {
   executiveNarrative?: string; 
 }
 
+export interface ProcessedMessage {
+  timestamp: string;
+  sender: string;
+  content: string;
+  hash: string;
+}
+
 export interface ProcessedData {
   id: string;
   timestamp: number;
   leads: Lead[];
   analytics: Analytics;
+  processedMessages?: ProcessedMessage[];
 }

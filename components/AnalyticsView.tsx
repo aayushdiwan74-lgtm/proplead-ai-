@@ -1,10 +1,29 @@
 import React, { useState, useMemo } from 'react';
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend, LineChart, Line } from 'recharts';
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Cell, Legend, LineChart, Line, ReferenceLine, Label } from 'recharts';
 import { Analytics, MarketCategory } from '../types';
 
 interface AnalyticsViewProps {
   analytics: Analytics;
 }
+
+// Helper for Linear Regression
+const calculateTrendline = (data: { x: number, y: number }[]) => {
+  const n = data.length;
+  if (n < 2) return null;
+
+  let sumX = 0, sumY = 0, sumXY = 0, sumX2 = 0;
+  for (const p of data) {
+    sumX += p.x;
+    sumY += p.y;
+    sumXY += p.x * p.y;
+    sumX2 += p.x * p.x;
+  }
+
+  const slope = (n * sumXY - sumX * sumY) / (n * sumX2 - sumX * sumX);
+  const intercept = (sumY - slope * sumX) / n;
+
+  return { slope, intercept };
+};
 
 const AnalyticsView: React.FC<AnalyticsViewProps> = ({ analytics }) => {
   const [activeTab, setActiveTab] = useState<'visuals' | 'reports' | 'comparison' | 'trends'>('visuals');
@@ -39,16 +58,36 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ analytics }) => {
     const item = analytics.locationPricing.find(l => `${l.location}|${l.marketCategory}` === selectedTrendLoc);
     if (!item || !item.history) return [];
     
-    return [...item.history]
-      .sort((a, b) => {
-        const dateA = new Date(a.date.split('/').reverse().join('-'));
-        const dateB = new Date(b.date.split('/').reverse().join('-'));
-        return dateA.getTime() - dateB.getTime();
-      })
-      .map(h => ({
+    const parseDate = (d: string) => {
+      if (d.includes('-')) return new Date(d).getTime();
+      const parts = d.split('/');
+      if (parts.length === 3) {
+        const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+        return new Date(`${year}-${parts[1]}-${parts[0]}`).getTime();
+      }
+      return new Date(d).getTime();
+    };
+
+    const sortedHistory = [...item.history]
+      .sort((a, b) => parseDate(a.date) - parseDate(b.date));
+
+    const regressionPoints = sortedHistory.map(h => ({
+      x: parseDate(h.date),
+      y: h.rate
+    }));
+
+    const trendline = calculateTrendline(regressionPoints);
+
+    return sortedHistory.map((h, i) => {
+      const x = parseDate(h.date);
+      return {
         ...h,
-        formattedDate: h.date
-      }));
+        timestamp: x,
+        formattedDate: h.date,
+        trend: trendline ? trendline.slope * x + trendline.intercept : null,
+        isLatest: i === sortedHistory.length - 1
+      };
+    });
   }, [analytics.locationPricing, selectedTrendLoc]);
 
   const trendAnalysis = useMemo(() => {
@@ -58,12 +97,21 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ analytics }) => {
 
     const first = trendData[0].rate;
     const last = trendData[trendData.length - 1].rate;
-    const percentChange = ((last - first) / first) * 100;
+    const prev = trendData[trendData.length - 2].rate;
     
+    const overallGrowth = ((last - first) / first) * 100;
+    const weeklyChange = ((last - prev) / prev) * 100;
+    
+    let direction: 'Uptrend' | 'Downtrend' | 'Stable' = 'Stable';
+    if (overallGrowth > 2) direction = 'Uptrend';
+    else if (overallGrowth < -2) direction = 'Downtrend';
+
     return {
-      percentChange: percentChange.toFixed(2),
-      isPositive: percentChange >= 0,
-      summary: `The property valuation in this sector has ${percentChange >= 0 ? 'appreciated' : 'depreciated'} by ${Math.abs(percentChange).toFixed(2)}% during the observed timeframe. This shift reflects the current liquidity and demand-supply dynamics specific to the ${item.marketCategory} asset class in ${item.location}. Investors should monitor this ${item.trendDirection} trend closely to optimize entry and exit points in the local market.`
+      overallGrowth: overallGrowth.toFixed(2),
+      weeklyChange: weeklyChange.toFixed(2),
+      direction,
+      isPositive: overallGrowth >= 0,
+      summary: `The property valuation in this sector has ${overallGrowth >= 0 ? 'appreciated' : 'depreciated'} by ${Math.abs(overallGrowth).toFixed(2)}% during the observed timeframe. This shift reflects the current liquidity and demand-supply dynamics specific to the ${item.marketCategory} asset class in ${item.location}. Investors should monitor this ${item.trendDirection} trend closely to optimize entry and exit points in the local market.`
     };
   }, [trendData, analytics.locationPricing, selectedTrendLoc]);
 
@@ -265,7 +313,9 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ analytics }) => {
           <div className="bg-white p-8 rounded-3xl border border-slate-200 shadow-sm">
             <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8">
               <div>
-                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">Historical Price Trend Analysis</h3>
+                <h3 className="text-xl font-black text-slate-900 uppercase tracking-tight">
+                  Historic Price Trend – {selectedTrendLoc ? selectedTrendLoc.split('|')[0] : 'Market'}
+                </h3>
                 <p className="text-slate-500 text-sm font-medium">Select a project to visualize its price trajectory over time.</p>
               </div>
               <div className="w-full md:w-72">
@@ -285,49 +335,121 @@ const AnalyticsView: React.FC<AnalyticsViewProps> = ({ analytics }) => {
             </div>
 
             {selectedTrendLoc ? (
-              <div className="space-y-8 animate-fade-in">
-                <div className="h-[400px] w-full">
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={trendData}>
-                      <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
-                      <XAxis dataKey="formattedDate" fontSize={10} axisLine={false} tickLine={false} fontWeight="800" />
-                      <YAxis fontSize={10} axisLine={false} tickLine={false} fontWeight="600" />
-                      <Tooltip 
-                        contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
-                        labelStyle={{ fontWeight: '900', fontSize: '10px', color: '#1e293b' }}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="rate" 
-                        name="Price (₹/sqft)" 
-                        stroke="#4f46e5" 
-                        strokeWidth={4} 
-                        dot={{ r: 6, fill: '#4f46e5', strokeWidth: 2, stroke: '#fff' }} 
-                        activeDot={{ r: 8, strokeWidth: 0 }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
+              <div className="space-y-12 animate-fade-in">
+                <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-inner">
+                  <div className="h-[450px] w-full">
+                    <ResponsiveContainer width="100%" height="100%">
+                      <LineChart data={trendData} margin={{ top: 40, right: 40, left: 20, bottom: 20 }}>
+                        <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#f1f5f9" />
+                        <XAxis dataKey="formattedDate" fontSize={10} axisLine={false} tickLine={false} fontWeight="800" />
+                        <YAxis fontSize={10} axisLine={false} tickLine={false} fontWeight="600" domain={['auto', 'auto']} />
+                        <Tooltip 
+                          contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 10px 15px -3px rgb(0 0 0 / 0.1)' }}
+                          labelStyle={{ fontWeight: '900', fontSize: '10px', color: '#1e293b' }}
+                        />
+                        <Legend verticalAlign="top" height={36} iconType="circle" wrapperStyle={{ fontSize: '10px', fontWeight: '800', textTransform: 'uppercase', letterSpacing: '1px' }} />
+                        
+                        <Line 
+                          type="monotone" 
+                          dataKey="rate" 
+                          name="Price per Sq Ft" 
+                          stroke="#1f77b4" 
+                          strokeWidth={4} 
+                          dot={{ r: 6, fill: '#1f77b4', strokeWidth: 2, stroke: '#fff' }} 
+                          activeDot={{ r: 8, strokeWidth: 0 }}
+                        />
+                        
+                        <Line 
+                          type="monotone" 
+                          dataKey="trend" 
+                          name="Trendline (Linear Regression)" 
+                          stroke="#94a3b8" 
+                          strokeWidth={2} 
+                          strokeDasharray="5 5" 
+                          dot={false} 
+                          activeDot={false}
+                        />
+
+                        {trendData.length > 0 && (
+                          <ReferenceLine x={trendData[trendData.length - 1].formattedDate} stroke="transparent">
+                            <Label 
+                              value="Latest Update" 
+                              position="top" 
+                              fill="#1f77b4" 
+                              fontSize={10} 
+                              fontWeight="900" 
+                              offset={10}
+                              className="uppercase tracking-widest"
+                            />
+                          </ReferenceLine>
+                        )}
+                      </LineChart>
+                    </ResponsiveContainer>
+                  </div>
                 </div>
 
                 {trendAnalysis && (
-                  <div className="bg-slate-50 p-8 rounded-2xl border border-slate-100">
-                    <div className="flex items-center space-x-3 mb-4">
-                      <div className={`w-2 h-6 rounded-full ${trendAnalysis.isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
-                      <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Financial Performance Summary</h4>
-                    </div>
-                    <p className="text-lg text-slate-700 font-bold leading-relaxed">
-                      {trendAnalysis.summary}
-                    </p>
-                    <div className="mt-6 flex items-center space-x-4">
-                      <div className="bg-white px-4 py-2 rounded-xl border border-slate-200">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Net Variance</p>
-                        <p className={`text-xl font-black ${trendAnalysis.isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
-                          {trendAnalysis.isPositive ? '+' : ''}{trendAnalysis.percentChange}%
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                    <div className="lg:col-span-2 space-y-6">
+                      <div className="bg-slate-50 p-8 rounded-3xl border border-slate-100">
+                        <div className="flex items-center space-x-3 mb-4">
+                          <div className={`w-2 h-6 rounded-full ${trendAnalysis.isPositive ? 'bg-emerald-500' : 'bg-rose-500'}`}></div>
+                          <h4 className="text-xs font-black text-slate-800 uppercase tracking-widest">Market Insight Summary</h4>
+                        </div>
+                        <p className="text-lg text-slate-700 font-bold leading-relaxed">
+                          {trendAnalysis.summary}
                         </p>
+                        <div className="mt-8 grid grid-cols-2 md:grid-cols-4 gap-4">
+                          <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Weekly Change</p>
+                            <p className={`text-lg font-black ${Number(trendAnalysis.weeklyChange) >= 0 ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {Number(trendAnalysis.weeklyChange) >= 0 ? '+' : ''}{trendAnalysis.weeklyChange}%
+                            </p>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Overall Growth</p>
+                            <p className={`text-lg font-black ${trendAnalysis.isPositive ? 'text-emerald-600' : 'text-rose-600'}`}>
+                              {trendAnalysis.isPositive ? '+' : ''}{trendAnalysis.overallGrowth}%
+                            </p>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Trend Direction</p>
+                            <p className={`text-lg font-black ${trendAnalysis.direction === 'Uptrend' ? 'text-emerald-600' : trendAnalysis.direction === 'Downtrend' ? 'text-rose-600' : 'text-slate-500'}`}>
+                              {trendAnalysis.direction}
+                            </p>
+                          </div>
+                          <div className="bg-white p-4 rounded-2xl border border-slate-200">
+                            <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest mb-1">Data Points</p>
+                            <p className="text-lg font-black text-slate-800">{trendData.length}</p>
+                          </div>
+                        </div>
                       </div>
-                      <div className="bg-white px-4 py-2 rounded-xl border border-slate-200">
-                        <p className="text-[9px] font-black text-slate-400 uppercase tracking-widest">Data Points</p>
-                        <p className="text-xl font-black text-slate-800">{trendData.length}</p>
+                    </div>
+
+                    <div className="bg-white rounded-3xl border border-slate-200 overflow-hidden shadow-sm">
+                      <div className="bg-slate-900 p-4">
+                        <h4 className="text-[10px] font-black text-white uppercase tracking-widest">Historical Dataset</h4>
+                      </div>
+                      <div className="max-h-[350px] overflow-y-auto">
+                        <table className="w-full text-left">
+                          <thead className="bg-slate-50 sticky top-0">
+                            <tr>
+                              <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest">Week</th>
+                              <th className="px-4 py-3 text-[9px] font-black text-slate-400 uppercase tracking-widest text-right">Price/Sqft</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100">
+                            {[...trendData].reverse().map((h, i) => (
+                              <tr key={i} className={h.isLatest ? 'bg-indigo-50/50' : ''}>
+                                <td className="px-4 py-3 text-xs font-bold text-slate-600">
+                                  {h.formattedDate}
+                                  {h.isLatest && <span className="ml-2 text-[8px] bg-indigo-600 text-white px-1.5 py-0.5 rounded-full uppercase tracking-tighter">Latest</span>}
+                                </td>
+                                <td className="px-4 py-3 text-xs font-black text-slate-800 text-right">₹{h.rate}</td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
                       </div>
                     </div>
                   </div>

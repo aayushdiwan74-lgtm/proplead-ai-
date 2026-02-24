@@ -1,7 +1,7 @@
 
 import React, { useState, useMemo, useEffect } from 'react';
-import { processChatLogs } from './services/geminiService';
-import { ProcessedData, Lead } from './types';
+import { processChatLogs, parseWhatsAppLogs } from './services/geminiService';
+import { ProcessedData, Lead, ProcessedMessage } from './types';
 import Header from './components/Header';
 import LogUploader from './components/LogUploader';
 import DataTable from './components/DataTable';
@@ -26,6 +26,8 @@ const App: React.FC = () => {
   const [searchTerm, setSearchTerm] = useState('');
   const [dupeCount, setDupeCount] = useState(0);
   const [newCount, setNewCount] = useState(0);
+  const [msgDupeCount, setMsgDupeCount] = useState(0);
+  const [msgNewCount, setMsgNewCount] = useState(0);
 
   useEffect(() => {
     localStorage.setItem('prop_lead_history', JSON.stringify(history));
@@ -67,27 +69,29 @@ const App: React.FC = () => {
     setError(null);
     setDupeCount(0);
     setNewCount(0);
-    setProgressMsg('Engineering Real Estate Data Table...');
+    setMsgDupeCount(0);
+    setMsgNewCount(0);
+    setProgressMsg('Parsing Log Sequence...');
     
     try {
-      const result = await processChatLogs(logs, (msg) => setProgressMsg(msg));
+      // 1. Parse logs into discrete messages
+      const allMessages = parseWhatsAppLogs(logs);
       
-      // Load all historical fingerprints for cross-vault comparison
-      const vaultFingerprints = new Set(
-        history.flatMap(report => report.leads.map(l => getLeadFingerprint(l)))
+      // 2. Load all historical message hashes
+      const seenMessageHashes = new Set(
+        history.flatMap(report => (report.processedMessages || []).map(m => m.hash))
       );
 
-      // Identify the Delta: Only leads not seen in any previous processing run
-      const freshLeads = result.leads.filter(l => !vaultFingerprints.has(getLeadFingerprint(l)));
-      const duplicatesFound = result.leads.length - freshLeads.length;
+      // 3. Identify New Messages
+      const newMessages = allMessages.filter(m => !seenMessageHashes.has(m.hash));
+      const duplicateMessagesCount = allMessages.length - newMessages.length;
       
-      setDupeCount(duplicatesFound);
-      setNewCount(freshLeads.length);
+      setMsgDupeCount(duplicateMessagesCount);
+      setMsgNewCount(newMessages.length);
 
-      // Automatic Cleansing: 100% Duplicate Rate Protection
-      if (freshLeads.length === 0 && result.leads.length > 0) {
+      if (newMessages.length === 0 && allMessages.length > 0) {
         setError({ 
-          message: "SYSTEM ALERT: This file has already been extracted. No new unique listings detected in the sequence.", 
+          message: "SYSTEM ALERT: All messages in this file have already been processed. No new data to extract.", 
           isQuota: false,
           isDuplicate: true 
         });
@@ -95,20 +99,37 @@ const App: React.FC = () => {
         return;
       }
 
-      if (freshLeads.length === 0 && result.leads.length === 0) {
+      // 4. Reconstruct log text from ONLY new messages for Gemini processing
+      const newLogText = newMessages.map(m => `[${m.timestamp}] ${m.sender}: ${m.content}`).join('\n');
+      
+      setProgressMsg('Engineering Real Estate Data Table...');
+      const result = await processChatLogs(newLogText, (msg) => setProgressMsg(msg));
+      
+      // 5. Lead-level deduplication (secondary safety)
+      const vaultFingerprints = new Set(
+        history.flatMap(report => report.leads.map(l => getLeadFingerprint(l)))
+      );
+
+      const freshLeads = result.leads.filter(l => !vaultFingerprints.has(getLeadFingerprint(l)));
+      const duplicatesFound = result.leads.length - freshLeads.length;
+      
+      setDupeCount(duplicatesFound);
+      setNewCount(freshLeads.length);
+
+      if (freshLeads.length === 0 && result.leads.length > 0) {
         setError({ 
-          message: "No property listings could be identified in the provided log content.", 
+          message: "VAULT SYNC: New messages processed, but they contained duplicate listings already in your vault.", 
           isQuota: false,
-          isDuplicate: false 
+          isDuplicate: true 
         });
-        setLoading(false);
-        return;
+        // We still want to save the fact that we processed these messages
       }
 
-      // Create a Delta Report: Only store the new entries to keep the vault clean
+      // 6. Create a Delta Report
       const cleanedResult: ProcessedData = { 
         ...result, 
         leads: freshLeads,
+        processedMessages: newMessages,
         analytics: {
           ...result.analytics,
           monthlySummary: {
@@ -201,12 +222,18 @@ const App: React.FC = () => {
                 <div className="flex flex-wrap items-center gap-4">
                   <div className="bg-emerald-100 text-emerald-700 px-5 py-2.5 rounded-2xl border border-emerald-200 text-xs font-black uppercase tracking-widest flex items-center">
                     <span className="w-2 h-2 bg-emerald-500 rounded-full mr-3 animate-pulse"></span>
-                    {newCount} New Delta Leads
+                    {msgNewCount} New Messages • {newCount} Delta Leads
                   </div>
-                  {dupeCount > 0 && (
+                  {msgDupeCount > 0 && (
                     <div className="bg-slate-100 text-slate-500 px-5 py-2.5 rounded-2xl border border-slate-200 text-xs font-black uppercase tracking-widest flex items-center">
                       <svg className="w-3.5 h-3.5 mr-2 opacity-50" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" /></svg>
-                      {dupeCount} Vault Duplicates Ignored
+                      {msgDupeCount} Duplicate Messages Ignored
+                    </div>
+                  )}
+                  {dupeCount > 0 && (
+                    <div className="bg-amber-50 text-amber-600 px-5 py-2.5 rounded-2xl border border-amber-100 text-xs font-black uppercase tracking-widest flex items-center">
+                      <svg className="w-3.5 h-3.5 mr-2 opacity-50" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm1-12a1 1 0 10-2 0v4a1 1 0 00.293.707l2.828 2.829a1 1 0 101.415-1.415L11 9.586V6z" clipRule="evenodd" /></svg>
+                      {dupeCount} Vault Duplicate Leads Filtered
                     </div>
                   )}
                   <button 

@@ -1,5 +1,5 @@
 
-import React from 'react';
+import React, { useState } from 'react';
 import { Lead, Category } from '../types';
 
 interface DataTableProps {
@@ -11,6 +11,17 @@ interface DataTableProps {
 }
 
 const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, onSearchChange, onClose }) => {
+  const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+
+  const toggleRow = (idx: number) => {
+    const newExpanded = new Set(expandedRows);
+    if (newExpanded.has(idx)) {
+      newExpanded.delete(idx);
+    } else {
+      newExpanded.add(idx);
+    }
+    setExpandedRows(newExpanded);
+  };
   
   const handleExportExcel = () => {
     const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "LocationLink", "Additional Details", "Phone", "Category"];
@@ -145,10 +156,23 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                       ) : <span className="text-slate-200">—</span>}
                     </td>
                     <td className="px-4 py-4 border-r border-slate-100">
-                      <p className="text-xs text-slate-700 leading-relaxed whitespace-pre-wrap font-medium">
-                        {l.additionalDetails}
-                      </p>
-                      <div className="mt-2 flex items-center space-x-2">
+                      <div className="relative">
+                        <p className={`text-xs text-slate-700 leading-relaxed whitespace-pre-wrap font-medium ${expandedRows.has(l.originalIndex) ? '' : 'line-clamp-2'}`}>
+                          {l.additionalDetails}
+                        </p>
+                        {l.additionalDetails && l.additionalDetails.length > 80 && (
+                          <button 
+                            onClick={() => toggleRow(l.originalIndex)}
+                            className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mt-2 hover:text-indigo-800 transition-colors flex items-center space-x-1"
+                          >
+                            <span>{expandedRows.has(l.originalIndex) ? 'Show Less' : 'View Full Details'}</span>
+                            <svg className={`w-3 h-3 transition-transform ${expandedRows.has(l.originalIndex) ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
+                            </svg>
+                          </button>
+                        )}
+                      </div>
+                      <div className="mt-3 flex items-center space-x-2">
                         <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded">
                           {l.location}
                         </span>

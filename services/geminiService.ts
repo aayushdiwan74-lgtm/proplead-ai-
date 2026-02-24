@@ -1,7 +1,49 @@
 import { GoogleGenAI, Type } from "@google/genai";
-import { ProcessedData, Category, Lead, Analytics, PricingIntelligence, CategoryInsight, MarketCategory } from "../types";
+import { ProcessedData, Category, Lead, Analytics, PricingIntelligence, CategoryInsight, MarketCategory, ProcessedMessage } from "../types";
 
 const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+export const parseWhatsAppLogs = (text: string): ProcessedMessage[] => {
+  const messages: ProcessedMessage[] = [];
+  // Regex to match common WhatsApp message starts: [Date, Time] Sender: or Date, Time - Sender:
+  const messageRegex = /(?:^|\n)(?:\[?(\d{1,4}[-/.]\d{1,2}[-/.]\d{1,4}),?\s+(\d{1,2}:\d{2}(?::\d{2})?(?:\s*[ap]m)?)\]?)\s*(?:-\s*)?([^:]+):\s*/gi;
+  
+  let match;
+  let lastIndex = 0;
+  let currentMsg: Partial<ProcessedMessage> | null = null;
+
+  while ((match = messageRegex.exec(text)) !== null) {
+    if (currentMsg) {
+      currentMsg.content = text.substring(lastIndex, match.index).trim();
+      currentMsg.hash = `${currentMsg.timestamp}|${currentMsg.sender}|${currentMsg.content}`;
+      messages.push(currentMsg as ProcessedMessage);
+    }
+    currentMsg = {
+      timestamp: `${match[1]} ${match[2]}`,
+      sender: match[3].trim(),
+    };
+    lastIndex = messageRegex.lastIndex;
+  }
+
+  if (currentMsg) {
+    currentMsg.content = text.substring(lastIndex).trim();
+    currentMsg.hash = `${currentMsg.timestamp}|${currentMsg.sender}|${currentMsg.content}`;
+    messages.push(currentMsg as ProcessedMessage);
+  }
+
+  // Fallback for non-standard logs
+  if (messages.length === 0 && text.trim().length > 0) {
+    const content = text.trim();
+    messages.push({
+      timestamp: new Date().toISOString(),
+      sender: "Unknown",
+      content: content,
+      hash: `unknown|unknown|${content}`
+    });
+  }
+
+  return messages;
+};
 
 const fetchWithRetry = async <T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> => {
   let lastError: any;
@@ -79,7 +121,16 @@ const calculateAnalytics = (leads: Lead[]): Analytics => {
       locCatGroups[key] = { rates: [], supply: 0, demand: 0, location: loc, category: mCat };
     }
     const group = locCatGroups[key];
-    if (l.ratePerSqFt) group.rates.push({ rate: l.ratePerSqFt, date: l.date });
+    if (l.ratePerSqFt) {
+      // Deduplicate by date: if date exists, we could average or replace. 
+      // User said "Remove duplicate week entries", implying one per week/date.
+      const existing = group.rates.find(r => r.date === l.date);
+      if (existing) {
+        existing.rate = (existing.rate + l.ratePerSqFt) / 2;
+      } else {
+        group.rates.push({ rate: l.ratePerSqFt, date: l.date });
+      }
+    }
     if (l.category === Category.DEMAND) group.demand++; else group.supply++;
   });
 
@@ -108,7 +159,17 @@ const calculateAnalytics = (leads: Lead[]): Analytics => {
     // Simple Trend Analysis
     let trend: 'up' | 'down' | 'stable' = 'stable';
     if (data.rates.length >= 2) {
-      const sorted = [...data.rates].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      const parseDate = (d: string) => {
+        if (d.includes('-')) return new Date(d).getTime();
+        const parts = d.split('/');
+        if (parts.length === 3) {
+          // DD/MM/YY -> YYYY-MM-DD
+          const year = parts[2].length === 2 ? `20${parts[2]}` : parts[2];
+          return new Date(`${year}-${parts[1]}-${parts[0]}`).getTime();
+        }
+        return new Date(d).getTime();
+      };
+      const sorted = [...data.rates].sort((a, b) => parseDate(a.date) - parseDate(b.date));
       const first = sorted[0].rate;
       const last = sorted[sorted.length - 1].rate;
       if (last > first * 1.02) trend = 'up';
@@ -165,10 +226,11 @@ export const processChatLogs = async (logText: string, onProgress?: (msg: string
         
         EXTRACTION RULES:
         1. GRANULARITY: If a project (e.g. 'Swarnbhoomi') has multiple property types (Residential, Commercial, etc.) mentioned in the same or separate messages, extract EACH as a separate lead.
-        2. CATEGORY: Classify strictly into ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'].
-        3. MATH: ALWAYS convert sizes to SqFt (1 Acre=43560, 1 Sq Yard=9, 1 Bigha=27225) before calculating ratePerSqFt.
-        4. EXTRACT:
-           - date: DD/MM/YY
+        2. WEEKLY DATA: If you see the format "Week: [YYYY-MM-DD]", "Locality: [Name]", "Price per Sq Ft: [Value]", this is a high-priority historical data point. Extract the date exactly as YYYY-MM-DD.
+        3. CATEGORY: Classify strictly into ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'].
+        4. MATH: ALWAYS convert sizes to SqFt (1 Acre=43560, 1 Sq Yard=9, 1 Bigha=27225) before calculating ratePerSqFt.
+        5. EXTRACT:
+           - date: DD/MM/YY or YYYY-MM-DD
            - who: Sender/Broker
            - propertyType: Specific (e.g., '3BHK Flat', 'Industrial Shed')
            - marketCategory: Strict classification from above.
