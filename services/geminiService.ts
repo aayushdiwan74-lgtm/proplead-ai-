@@ -1,0 +1,221 @@
+import { GoogleGenAI, Type } from "@google/genai";
+import { ProcessedData, Category, Lead, Analytics, PricingIntelligence, CategoryInsight, MarketCategory } from "../types";
+
+const sleep = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+
+const fetchWithRetry = async <T>(fn: () => Promise<T>, maxRetries = 3): Promise<T> => {
+  let lastError: any;
+  for (let i = 0; i < maxRetries; i++) {
+    try {
+      return await fn();
+    } catch (err: any) {
+      lastError = err;
+      const errorMsg = err.message || "";
+      if (errorMsg.includes("429") || errorMsg.toLowerCase().includes("quota")) {
+        const waitTime = Math.pow(2, i + 1) * 1000;
+        await sleep(waitTime);
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+};
+
+const CHUNK_SIZE = 100000; 
+
+const chunkText = (text: string, size: number): string[] => {
+  const chunks: string[] = [];
+  if (!text) return chunks;
+  for (let i = 0; i < text.length; i += size) {
+    chunks.push(text.substring(i, i + size));
+  }
+  return chunks;
+};
+
+const robustJsonParse = (jsonStr: string) => {
+  let cleaned = jsonStr.trim();
+  if (cleaned.startsWith('```')) {
+    cleaned = cleaned.replace(/^```(?:json)?/, '').replace(/```$/, '').trim();
+  }
+  try {
+    return JSON.parse(cleaned);
+  } catch (e) {
+    console.error("JSON Parse Error:", e);
+    return { leads: [] };
+  }
+};
+
+const calculateAnalytics = (leads: Lead[]): Analytics => {
+  const brokerCounts: Record<string, number> = {};
+  const locCatGroups: Record<string, { rates: {rate: number, date: string}[], supply: number, demand: number, location: string, category: MarketCategory }> = {};
+  const catGroups: Record<MarketCategory, number[]> = {
+    'Residential': [],
+    'Commercial': [],
+    'Industrial': [],
+    'Plot': [],
+    'Other': []
+  };
+  const propertyBreakdown: Record<string, number> = {};
+  
+  let totalDemand = 0;
+  let totalSupply = 0;
+
+  leads.forEach(l => {
+    brokerCounts[l.who] = (brokerCounts[l.who] || 0) + 1;
+    if (l.category === Category.DEMAND) totalDemand++; else totalSupply++;
+    const pType = l.propertyType || "Other";
+    propertyBreakdown[pType] = (propertyBreakdown[pType] || 0) + 1;
+
+    const mCat = l.marketCategory || 'Other';
+    if (l.ratePerSqFt && l.ratePerSqFt > 0) {
+      catGroups[mCat].push(l.ratePerSqFt);
+    }
+
+    const loc = (l.location || "Unknown").trim().toUpperCase();
+    const key = `${loc}|${mCat}`;
+    
+    if (!locCatGroups[key]) {
+      locCatGroups[key] = { rates: [], supply: 0, demand: 0, location: loc, category: mCat };
+    }
+    const group = locCatGroups[key];
+    if (l.ratePerSqFt) group.rates.push({ rate: l.ratePerSqFt, date: l.date });
+    if (l.category === Category.DEMAND) group.demand++; else group.supply++;
+  });
+
+  const categoryInsights: CategoryInsight[] = (Object.entries(catGroups) as [MarketCategory, number[]][]).map(([cat, rates]) => {
+    if (rates.length === 0) return null;
+    const mean = rates.reduce((a, b) => a + b, 0) / rates.length;
+    const filteredRates = rates.filter(r => r < mean * 3 && r > mean * 0.1); 
+    const outliersCount = rates.length - filteredRates.length;
+    const finalAvg = filteredRates.length > 0 
+      ? Math.round(filteredRates.reduce((a, b) => a + b, 0) / filteredRates.length) 
+      : Math.round(mean);
+
+    return {
+      category: cat,
+      avgPricePerSqFt: finalAvg,
+      totalLeads: rates.length,
+      outliersCount,
+      notes: outliersCount > 0 ? `Normalized for ${outliersCount} outliers.` : 'Data consistency confirmed.'
+    };
+  }).filter(Boolean) as CategoryInsight[];
+
+  const locationPricing: PricingIntelligence[] = Object.entries(locCatGroups).map(([key, data]): PricingIntelligence => {
+    const ratesOnly = data.rates.map(r => r.rate);
+    const avgRate = ratesOnly.length > 0 ? Math.round(ratesOnly.reduce((a, b) => a + b, 0) / ratesOnly.length) : 0;
+    
+    // Simple Trend Analysis
+    let trend: 'up' | 'down' | 'stable' = 'stable';
+    if (data.rates.length >= 2) {
+      const sorted = [...data.rates].sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+      const first = sorted[0].rate;
+      const last = sorted[sorted.length - 1].rate;
+      if (last > first * 1.02) trend = 'up';
+      else if (last < first * 0.98) trend = 'down';
+    }
+
+    return {
+      location: data.location,
+      marketCategory: data.category,
+      avgRate,
+      leadCount: data.rates.length,
+      minPrice: ratesOnly.length > 0 ? Math.min(...ratesOnly).toString() : "N/A",
+      maxPrice: ratesOnly.length > 0 ? Math.max(...ratesOnly).toString() : "N/A",
+      trendDirection: trend,
+      history: data.rates
+    };
+  }).sort((a, b) => b.leadCount - a.leadCount).slice(0, 50);
+
+  const topLoc = locationPricing[0];
+  const narrative = `Executive Summary: Analyzed ${leads.length} assets. Key Insight: ${topLoc ? `${topLoc.location} (${topLoc.marketCategory})` : 'Market'} is seeing high activity with an average of ₹${topLoc?.avgRate || 0}/sqft. We've identified ${categoryInsights.length} distinct asset classes. By segmenting by property type, we've revealed that ${categoryInsights.sort((a,b) => b.avgPricePerSqFt - a.avgPricePerSqFt)[0]?.category || 'certain sectors'} command the highest premiums.`;
+
+  return {
+    topBrokers: Object.entries(brokerCounts).map(([name, count]) => ({ name, count })).sort((a, b) => b.count - a.count).slice(0, 5),
+    locationPricing,
+    categoryInsights,
+    topDemandLocations: locationPricing.map(l => ({ location: l.location, count: locCatGroups[`${l.location}|${l.marketCategory}`].demand })).sort((a,b) => b.count - a.count).slice(0, 3),
+    topSupplyLocations: locationPricing.map(l => ({ location: l.location, count: locCatGroups[`${l.location}|${l.marketCategory}`].supply })).sort((a,b) => b.count - a.count).slice(0, 3),
+    monthlySummary: {
+      monthName: "Intelligence Vault",
+      totalLeads: leads.length,
+      demandPercentage: leads.length ? Math.round((totalDemand / leads.length) * 100) : 0,
+      supplyPercentage: leads.length ? Math.round((totalSupply / leads.length) * 100) : 0,
+      mostActiveBroker: Object.entries(brokerCounts).sort((a, b) => b[1] - a[1])[0]?.[0] || "N/A",
+      propertyBreakdown
+    },
+    executiveNarrative: narrative
+  };
+};
+
+export const processChatLogs = async (logText: string, onProgress?: (msg: string) => void): Promise<ProcessedData> => {
+  const chunks = chunkText(logText, CHUNK_SIZE);
+  const totalChunks = chunks.length;
+  const allLeads: Lead[] = [];
+
+  for (let i = 0; i < totalChunks; i++) {
+    if (onProgress) onProgress(`Data Engineering Pipeline (Segment ${i + 1}/${totalChunks})...`);
+
+    const chunkLeads = await fetchWithRetry(async () => {
+      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+      const response = await ai.models.generateContent({
+        model: 'gemini-3-flash-preview',
+        contents: `PERSONA: Real Estate Data Engineer. 
+        TASK: Extract listings, categorize them, and standardize math.
+        
+        EXTRACTION RULES:
+        1. GRANULARITY: If a project (e.g. 'Swarnbhoomi') has multiple property types (Residential, Commercial, etc.) mentioned in the same or separate messages, extract EACH as a separate lead.
+        2. CATEGORY: Classify strictly into ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'].
+        3. MATH: ALWAYS convert sizes to SqFt (1 Acre=43560, 1 Sq Yard=9, 1 Bigha=27225) before calculating ratePerSqFt.
+        4. EXTRACT:
+           - date: DD/MM/YY
+           - who: Sender/Broker
+           - propertyType: Specific (e.g., '3BHK Flat', 'Industrial Shed')
+           - marketCategory: Strict classification from above.
+           - size: Standardized string (e.g. '43560 sqft')
+           - ratePerSqFt: The calculated numeric price per sqft.
+           - priceRate: Original text (e.g. '₹2.5 Cr')
+           - location: Neighborhood or Project name.
+           - category: 'SUPPLY' (selling/leasing) or 'DEMAND' (buying/looking).
+           - additionalDetails: Full summary of text.
+
+        LOG CONTENT: ${chunks[i]}`,
+        config: {
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              leads: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    date: { type: Type.STRING },
+                    who: { type: Type.STRING },
+                    propertyType: { type: Type.STRING },
+                    marketCategory: { type: Type.STRING, enum: ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'] },
+                    size: { type: Type.STRING },
+                    priceRate: { type: Type.STRING },
+                    location: { type: Type.STRING },
+                    phoneNumber: { type: Type.STRING },
+                    category: { type: Type.STRING, enum: ["SUPPLY", "DEMAND"] },
+                    ratePerSqFt: { type: Type.NUMBER },
+                    additionalDetails: { type: Type.STRING }
+                  },
+                  required: ["date", "who", "marketCategory", "priceRate", "location", "category", "ratePerSqFt"]
+                }
+              }
+            }
+          }
+        }
+      });
+      const result = robustJsonParse(response.text || '{"leads":[]}');
+      return result.leads || [];
+    });
+
+    allLeads.push(...chunkLeads);
+  }
+
+  const analytics = calculateAnalytics(allLeads);
+  return { id: crypto.randomUUID(), timestamp: Date.now(), leads: allLeads, analytics };
+};
