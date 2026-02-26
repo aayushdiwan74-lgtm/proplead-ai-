@@ -138,7 +138,19 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                     <td className="px-4 py-4 text-xs font-medium text-slate-500 border-r border-slate-100">{l.date}</td>
                     <td className="px-4 py-4 border-r border-slate-100">
                       <p className="text-xs font-bold text-slate-800 break-words">{l.who}</p>
-                      <p className="text-[9px] text-slate-400 font-mono mt-1">{l.phoneNumber}</p>
+                      {l.phoneNumber && l.phoneNumber !== 'N/A' ? (
+                        <a 
+                          href={`tel:${l.phoneNumber.replace(/\D/g, '')}`}
+                          className="text-[9px] text-indigo-500 font-mono mt-1 hover:underline flex items-center space-x-1"
+                        >
+                          <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20">
+                            <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
+                          </svg>
+                          <span>{l.phoneNumber}</span>
+                        </a>
+                      ) : (
+                        <p className="text-[9px] text-slate-400 font-mono mt-1">{l.phoneNumber}</p>
+                      )}
                     </td>
                     <td className="px-4 py-4 text-xs text-slate-600 border-r border-slate-100">{l.propertyType}</td>
                     <td className="px-4 py-4 text-xs text-slate-600 border-r border-slate-100">{l.size}</td>
