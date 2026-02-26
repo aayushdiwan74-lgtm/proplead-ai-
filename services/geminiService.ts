@@ -122,14 +122,7 @@ const calculateAnalytics = (leads: Lead[]): Analytics => {
     }
     const group = locCatGroups[key];
     if (l.ratePerSqFt) {
-      // Deduplicate by date: if date exists, we could average or replace. 
-      // User said "Remove duplicate week entries", implying one per week/date.
-      const existing = group.rates.find(r => r.date === l.date);
-      if (existing) {
-        existing.rate = (existing.rate + l.ratePerSqFt) / 2;
-      } else {
-        group.rates.push({ rate: l.ratePerSqFt, date: l.date });
-      }
+      group.rates.push({ rate: l.ratePerSqFt, date: l.date });
     }
     if (l.category === Category.DEMAND) group.demand++; else group.supply++;
   });
@@ -221,25 +214,32 @@ export const processChatLogs = async (logText: string, onProgress?: (msg: string
       const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
       const response = await ai.models.generateContent({
         model: 'gemini-3-flash-preview',
-        contents: `PERSONA: Real Estate Data Engineer. 
-        TASK: Extract listings, categorize them, and standardize math.
+        contents: `ROLE: Highly accurate data extraction engine.
+        TASK: Extract ALL leads from the provided content.
         
-        EXTRACTION RULES:
-        1. GRANULARITY: If a project (e.g. 'Swarnbhoomi') has multiple property types (Residential, Commercial, etc.) mentioned in the same or separate messages, extract EACH as a separate lead.
-        2. WEEKLY DATA: If you see the format "Week: [YYYY-MM-DD]", "Locality: [Name]", "Price per Sq Ft: [Value]", this is a high-priority historical data point. Extract the date exactly as YYYY-MM-DD.
-        3. CATEGORY: Classify strictly into ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'].
-        4. MATH: ALWAYS convert sizes to SqFt (1 Acre=43560, 1 Sq Yard=9, 1 Bigha=27225) before calculating ratePerSqFt.
-        5. EXTRACT:
-           - date: DD/MM/YY or YYYY-MM-DD
-           - who: Sender/Broker
-           - propertyType: Specific (e.g., '3BHK Flat', 'Industrial Shed')
-           - marketCategory: Strict classification from above.
-           - size: Standardized string (e.g. '43560 sqft')
-           - ratePerSqFt: The calculated numeric price per sqft.
-           - priceRate: Original text (e.g. '₹2.5 Cr')
-           - location: Neighborhood or Project name.
-           - category: 'SUPPLY' (selling/leasing) or 'DEMAND' (buying/looking).
-           - additionalDetails: Full summary of text.
+        CRITICAL INSTRUCTIONS:
+        1. Do NOT skip any lead.
+        2. Do NOT summarize.
+        3. Do NOT assume.
+        4. Do NOT merge multiple leads into one.
+        5. Extract every possible lead entry exactly as found.
+        6. Even if information is incomplete, still extract it.
+        7. If the same lead appears twice with different details, treat them as separate entries.
+        8. If the same lead appears twice with identical details, still list both separately.
+        9. Do not modify spelling, numbers, or formatting.
+        10. Do not clean or correct the data.
+        
+        EXTRACTION SCHEMA RULES:
+        - date: DD/MM/YY or YYYY-MM-DD
+        - who: Sender/Broker
+        - propertyType: Specific (e.g., '3BHK Flat')
+        - marketCategory: ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other']
+        - size: Original text (e.g. '1 Acre')
+        - priceRate: Original text (e.g. '₹2.5 Cr')
+        - ratePerSqFt: Calculated numeric value (if possible, else 0).
+        - location: Neighborhood or Project name.
+        - category: 'SUPPLY' or 'DEMAND'.
+        - additionalDetails: Full summary of text.
 
         LOG CONTENT: ${chunks[i]}`,
         config: {
