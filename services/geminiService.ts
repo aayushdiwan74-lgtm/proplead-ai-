@@ -64,7 +64,8 @@ const fetchWithRetry = async <T>(fn: () => Promise<T>, maxRetries = 3): Promise<
   throw lastError;
 };
 
-const CHUNK_SIZE = 100000; 
+const CHUNK_SIZE = 40000; // Smaller chunks for better accuracy and faster individual responses
+const CONCURRENCY_LIMIT = 3; // Process 3 chunks at a time to stay within rate limits
 
 const chunkText = (text: string, size: number): string[] => {
   const chunks: string[] = [];
@@ -207,75 +208,83 @@ export const processChatLogs = async (logText: string, onProgress?: (msg: string
   const totalChunks = chunks.length;
   const allLeads: Lead[] = [];
 
-  for (let i = 0; i < totalChunks; i++) {
-    if (onProgress) onProgress(`Data Engineering Pipeline (Segment ${i + 1}/${totalChunks})...`);
+  // Process chunks in parallel with concurrency limit
+  for (let i = 0; i < totalChunks; i += CONCURRENCY_LIMIT) {
+    const currentBatch = chunks.slice(i, i + CONCURRENCY_LIMIT);
+    
+    if (onProgress) {
+      onProgress(`Extracting Data: Batch ${Math.floor(i / CONCURRENCY_LIMIT) + 1}/${Math.ceil(totalChunks / CONCURRENCY_LIMIT)}...`);
+    }
 
-    const chunkLeads = await fetchWithRetry(async () => {
-      const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
-      const response = await ai.models.generateContent({
-        model: 'gemini-3-flash-preview',
-        contents: `ROLE: Highly accurate data extraction engine.
-        TASK: Extract ALL leads from the provided content.
-        
-        CRITICAL INSTRUCTIONS:
-        1. Do NOT skip any lead.
-        2. Do NOT summarize.
-        3. Do NOT assume.
-        4. Do NOT merge multiple leads into one.
-        5. Extract every possible lead entry exactly as found.
-        6. Even if information is incomplete, still extract it.
-        7. If the same lead appears twice with different details, treat them as separate entries.
-        8. If the same lead appears twice with identical details, still list both separately.
-        9. Do not modify spelling, numbers, or formatting.
-        10. Do not clean or correct the data.
-        
-        EXTRACTION SCHEMA RULES:
-        - date: DD/MM/YY or YYYY-MM-DD
-        - who: Sender/Broker
-        - propertyType: Specific (e.g., '3BHK Flat')
-        - marketCategory: ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other']
-        - size: Original text (e.g. '1 Acre')
-        - priceRate: Original text (e.g. '₹2.5 Cr')
-        - ratePerSqFt: Calculated numeric value (if possible, else 0).
-        - location: Neighborhood or Project name.
-        - category: 'SUPPLY' or 'DEMAND'.
-        - additionalDetails: Full summary of text.
+    const batchResults = await Promise.all(currentBatch.map(async (chunk, batchIdx) => {
+      const chunkIdx = i + batchIdx;
+      return await fetchWithRetry(async () => {
+        const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
+        const response = await ai.models.generateContent({
+          model: 'gemini-3-flash-preview',
+          contents: `ROLE: Highly accurate data extraction engine.
+          TASK: Extract ALL leads from the provided content.
+          
+          CRITICAL INSTRUCTIONS:
+          1. Do NOT skip any lead.
+          2. Do NOT summarize.
+          3. Do NOT assume.
+          4. Do NOT merge multiple leads into one.
+          5. Extract every possible lead entry exactly as found.
+          6. Even if information is incomplete, still extract it.
+          7. If the same lead appears twice with different details, treat them as separate entries.
+          8. If the same lead appears twice with identical details, still list both separately.
+          9. Do not modify spelling, numbers, or formatting.
+          10. Do not clean or correct the data.
+          
+          EXTRACTION SCHEMA RULES:
+          - date: DD/MM/YY or YYYY-MM-DD
+          - who: Sender/Broker
+          - propertyType: Specific (e.g., '3BHK Flat')
+          - marketCategory: ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other']
+          - size: Original text (e.g. '1 Acre')
+          - priceRate: Original text (e.g. '₹2.5 Cr')
+          - ratePerSqFt: Calculated numeric value (if possible, else 0).
+          - location: Neighborhood or Project name.
+          - category: 'SUPPLY' or 'DEMAND'.
+          - additionalDetails: Full summary of text.
 
-        LOG CONTENT: ${chunks[i]}`,
-        config: {
-          responseMimeType: "application/json",
-          responseSchema: {
-            type: Type.OBJECT,
-            properties: {
-              leads: {
-                type: Type.ARRAY,
-                items: {
-                  type: Type.OBJECT,
-                  properties: {
-                    date: { type: Type.STRING },
-                    who: { type: Type.STRING },
-                    propertyType: { type: Type.STRING },
-                    marketCategory: { type: Type.STRING, enum: ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'] },
-                    size: { type: Type.STRING },
-                    priceRate: { type: Type.STRING },
-                    location: { type: Type.STRING },
-                    phoneNumber: { type: Type.STRING },
-                    category: { type: Type.STRING, enum: ["SUPPLY", "DEMAND"] },
-                    ratePerSqFt: { type: Type.NUMBER },
-                    additionalDetails: { type: Type.STRING }
-                  },
-                  required: ["date", "who", "marketCategory", "priceRate", "location", "category", "ratePerSqFt"]
+          LOG CONTENT: ${chunk}`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                leads: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      date: { type: Type.STRING },
+                      who: { type: Type.STRING },
+                      propertyType: { type: Type.STRING },
+                      marketCategory: { type: Type.STRING, enum: ['Residential', 'Commercial', 'Industrial', 'Plot', 'Other'] },
+                      size: { type: Type.STRING },
+                      priceRate: { type: Type.STRING },
+                      location: { type: Type.STRING },
+                      phoneNumber: { type: Type.STRING },
+                      category: { type: Type.STRING, enum: ["SUPPLY", "DEMAND"] },
+                      ratePerSqFt: { type: Type.NUMBER },
+                      additionalDetails: { type: Type.STRING }
+                    },
+                    required: ["date", "who", "marketCategory", "priceRate", "location", "category", "ratePerSqFt"]
+                  }
                 }
               }
             }
           }
-        }
+        });
+        const result = robustJsonParse(response.text || '{"leads":[]}');
+        return result.leads || [];
       });
-      const result = robustJsonParse(response.text || '{"leads":[]}');
-      return result.leads || [];
-    });
+    }));
 
-    allLeads.push(...chunkLeads);
+    batchResults.forEach(leads => allLeads.push(...leads));
   }
 
   const analytics = calculateAnalytics(allLeads);

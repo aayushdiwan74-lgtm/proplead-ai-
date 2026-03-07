@@ -175,10 +175,12 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                         {l.additionalDetails && l.additionalDetails.length > 80 && (
                           <button 
                             onClick={() => toggleRow(l.originalIndex)}
-                            className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mt-2 hover:text-indigo-800 transition-colors flex items-center space-x-1"
+                            className="text-[10px] font-black text-indigo-600 uppercase tracking-widest mt-3 hover:text-indigo-800 transition-all flex items-center space-x-1.5 group/details"
                           >
-                            <span>{expandedRows.has(l.originalIndex) ? 'Show Less' : 'View Full Details'}</span>
-                            <svg className={`w-3 h-3 transition-transform ${expandedRows.has(l.originalIndex) ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                            <span className="underline decoration-indigo-200 underline-offset-4 group-hover/details:decoration-indigo-600">
+                              {expandedRows.has(l.originalIndex) ? 'Collapse Details' : 'Expand Full Details'}
+                            </span>
+                            <svg className={`w-3.5 h-3.5 transition-transform duration-300 ${expandedRows.has(l.originalIndex) ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
                               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="3" d="M19 9l-7 7-7-7" />
                             </svg>
                           </button>
@@ -194,12 +196,12 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                       {l.phoneNumber && l.phoneNumber !== 'N/A' && l.phoneNumber.replace(/\D/g, '').length > 0 ? (
                         <a 
                           href={`tel:${l.phoneNumber.replace(/\D/g, '')}`} 
-                          className="inline-flex items-center justify-center space-x-2 w-full px-4 py-3 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl transition-all shadow-md hover:shadow-emerald-200 active:scale-95 group/btn"
+                          className="inline-flex items-center justify-center space-x-2 w-full px-4 py-3.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded-xl transition-all shadow-lg shadow-emerald-200/50 hover:shadow-emerald-300/60 active:scale-95 group/btn"
                         >
                           <svg className="w-4 h-4 transition-transform group-hover/btn:scale-110" fill="currentColor" viewBox="0 0 20 20">
                             <path d="M2 3a1 1 0 011-1h2.153a1 1 0 01.986.836l.74 4.435a1 1 0 01-.54 1.06l-1.548.773a11.037 11.037 0 006.105 6.105l.774-1.548a1 1 0 011.059-.54l4.435.74a1 1 0 01.836.986V17a1 1 0 01-1 1h-2C7.82 18 2 12.18 2 5V3z" />
                           </svg>
-                          <span className="text-[11px] font-black uppercase tracking-[0.1em]">CALL NOW</span>
+                          <span className="text-[11px] font-black uppercase tracking-[0.15em]">CALL NOW</span>
                         </a>
                       ) : (
                         <div className="flex flex-col items-center justify-center py-2 text-slate-300">
