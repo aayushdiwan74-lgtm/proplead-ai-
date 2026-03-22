@@ -222,20 +222,39 @@ export const processChatLogs = async (logText: string, onProgress?: (msg: string
         const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
         const response = await ai.models.generateContent({
           model: 'gemini-3-flash-preview',
-          contents: `ROLE: Highly accurate data extraction engine.
-          TASK: Extract ALL leads from the provided content.
+          contents: `ROLE: Highly accurate data extraction and cleaning engine.
+          TASK: Extract ALL leads from the provided content and clean the 'additionalDetails' field.
           
-          CRITICAL INSTRUCTIONS:
+          EXTRACTION INSTRUCTIONS:
           1. Do NOT skip any lead.
-          2. Do NOT summarize.
-          3. Do NOT assume.
-          4. Do NOT merge multiple leads into one.
-          5. Extract every possible lead entry exactly as found.
-          6. Even if information is incomplete, still extract it.
-          7. If the same lead appears twice with different details, treat them as separate entries.
-          8. If the same lead appears twice with identical details, still list both separately.
-          9. Do not modify spelling, numbers, or formatting.
-          10. Do not clean or correct the data.
+          2. Do NOT merge multiple leads into one.
+          3. Extract every possible lead entry.
+          4. Even if information is incomplete, still extract it.
+          5. If the same lead appears twice, treat them as separate entries.
+          
+          CLEANING INSTRUCTIONS FOR 'additionalDetails':
+          1. TRANSLATE & NORMALIZE: Convert all Hindi (Devanagari) and Hinglish (Roman-script Hindi) content into clean, fluent English. Preserve all factual data exactly — property sizes, prices, locations, rates, dimensions, road widths, directions (North/South/East/West), and contact numbers must not be altered or lost.
+          2. CLEAN GIBBERISH: If the text is a random fragment, single word, or completely unintelligible (e.g., "Pandri m", "Ret..37..lakh..akd", "Baana 12 acer"), set 'additionalDetails' to exactly: GIBBERISH
+          3. REMOVE NOISE: Strip all emojis (⛺🌟📍👉✅️), stylized Unicode fonts (𝔻𝕙𝕒𝕞𝕥𝕒𝕣𝕚), asterisks used for emphasis (*word*), excessive punctuation, and decorative formatting. Keep only the meaningful content.
+          4. STANDARDIZE REAL ESTATE TERMS: Use consistent English terminology:
+             - "bechna hai" / "बेचना है" → "For Sale"
+             - "chahiye" / "चाहिए" → "Required" or "Wanted"
+             - "kiraye pe" / "किराए पे" → "For Rent"
+             - "zameen" / "जमीन" → "Land"
+             - "makaan" / "मकान" → "House"
+             - "plot" stays as "Plot"
+             - "damar road" / "डामर रोड" → "Asphalt Road"
+             - "dharsa road" / "धरसा रोड" → "Side Road" or "Dharsa Road"
+             - "front" stays as "Front" (measurement context)
+             - "dismil" → "Decimal" (land area unit)
+             - "akad" / "एकड़" → "Acre"
+             - "sqft" / "वर्ग फुट" / "स्क्वायर फीट" → "Sq Ft"
+             - "taar ghera" / "तार घेरा" → "Wire Fencing"
+             - "boundary wall kiya" → "Boundary Wall Constructed"
+             - "diversion" / "डाइवर्सन" → "Diverted Plot" (land use conversion)
+             - "chukta" / "चुकता" → "Total / Lump Sum Price"
+             - "negotiable" / "नेगोशिएबल" → "Negotiable"
+             - "tatkal" → "Urgent"
           
           EXTRACTION SCHEMA RULES:
           - date: DD/MM/YY or YYYY-MM-DD
@@ -247,7 +266,7 @@ export const processChatLogs = async (logText: string, onProgress?: (msg: string
           - ratePerSqFt: Calculated numeric value (if possible, else 0).
           - location: Neighborhood or Project name.
           - category: 'SUPPLY' or 'DEMAND'.
-          - additionalDetails: Full summary of text.
+          - additionalDetails: The cleaned English property description following the cleaning instructions above.
 
           LOG CONTENT: ${chunk}`,
           config: {

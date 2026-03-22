@@ -24,13 +24,14 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
   };
   
   const handleExportExcel = () => {
-    const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "LocationLink", "Additional Details", "Phone", "Category"];
+    const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "Location", "LocationLink", "Additional Details", "Phone", "Category"];
     const rows = leads.map(l => [
       l.date,
       l.who,
       l.propertyType,
       l.size,
       (l.priceRate || '').replace(/,/g, ''),
+      l.location || '',
       l.locationLink || '',
       (l.additionalDetails || '').replace(/\n/g, ' '),
       l.phoneNumber,
@@ -53,13 +54,14 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
   };
 
   const handleExportGoogleSheets = () => {
-    const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "LocationLink", "Additional Details", "Phone", "Category"];
+    const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "Location", "LocationLink", "Additional Details", "Phone", "Category"];
     const rows = leads.map(l => [
       l.date,
       l.who,
       l.propertyType,
       l.size,
       l.priceRate || '',
+      l.location || '',
       l.locationLink || '',
       (l.additionalDetails || '').replace(/\n/g, ' '),
       l.phoneNumber,
@@ -126,6 +128,7 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                 <th className="px-4 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest border-r border-slate-100 w-32">Property Type</th>
                 <th className="px-4 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest border-r border-slate-100 w-24">Size</th>
                 <th className="px-4 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest border-r border-slate-100 w-32">Price/Rate</th>
+                <th className="px-4 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest border-r border-slate-100 w-32">Location</th>
                 <th className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest border-r border-slate-100 w-24">Link</th>
                 <th className="px-4 py-4 text-left text-[10px] font-black text-slate-400 uppercase tracking-widest min-w-[300px] border-r border-slate-100">Additional Details</th>
                 <th className="px-4 py-4 text-center text-[10px] font-black text-slate-400 uppercase tracking-widest w-40">Action</th>
@@ -160,6 +163,9 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                         {l.category}
                       </span>
                     </td>
+                    <td className="px-4 py-4 border-r border-slate-100">
+                      <p className="text-xs font-bold text-slate-700 uppercase tracking-tight">{l.location}</p>
+                    </td>
                     <td className="px-4 py-4 text-center border-r border-slate-100">
                       {l.locationLink ? (
                         <a href={l.locationLink} target="_blank" rel="noopener noreferrer" className="text-indigo-500 hover:text-indigo-700 transition-colors">
@@ -185,11 +191,6 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
                             </svg>
                           </button>
                         )}
-                      </div>
-                      <div className="mt-3 flex items-center space-x-2">
-                        <span className="text-[9px] font-black text-indigo-400 uppercase tracking-widest bg-indigo-50 px-2 py-0.5 rounded">
-                          {l.location}
-                        </span>
                       </div>
                     </td>
                     <td className="px-4 py-4 text-center">
