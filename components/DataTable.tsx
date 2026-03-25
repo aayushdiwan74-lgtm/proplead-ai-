@@ -12,6 +12,12 @@ interface DataTableProps {
 
 const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, onSearchChange, onClose }) => {
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [isExporting, setIsExporting] = useState(false);
+
+  const sanitizeRupee = (str: any) => {
+    if (typeof str !== 'string') return str;
+    return str.replace(/â,¹|â‚¹/g, '₹');
+  };
 
   const toggleRow = (idx: number) => {
     const newExpanded = new Set(expandedRows);
@@ -26,19 +32,19 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
   const handleExportExcel = () => {
     const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "Location", "LocationLink", "Additional Details", "Phone", "Category"];
     const rows = leads.map(l => [
-      l.date,
-      l.who,
-      l.propertyType,
-      l.size,
-      (l.priceRate || '').replace(/,/g, ''),
-      l.location || '',
-      l.locationLink || '',
-      (l.additionalDetails || '').replace(/\n/g, ' '),
-      l.phoneNumber,
-      l.category
+      sanitizeRupee(l.date),
+      sanitizeRupee(l.who),
+      sanitizeRupee(l.propertyType),
+      sanitizeRupee(l.size),
+      sanitizeRupee((l.priceRate || '').replace(/,/g, '')),
+      sanitizeRupee(l.location || ''),
+      sanitizeRupee(l.locationLink || ''),
+      sanitizeRupee((l.additionalDetails || '').replace(/\n/g, ' ')),
+      sanitizeRupee(l.phoneNumber),
+      sanitizeRupee(l.category)
     ]);
 
-    const csvContent = [
+    const csvContent = "\uFEFF" + [
       headers.join(","),
       ...rows.map(e => e.map(val => `"${val}"`).join(","))
     ].join("\n");
@@ -53,29 +59,47 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
     document.body.removeChild(link);
   };
 
-  const handleExportGoogleSheets = () => {
-    const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "Location", "LocationLink", "Additional Details", "Phone", "Category"];
-    const rows = leads.map(l => [
-      l.date,
-      l.who,
-      l.propertyType,
-      l.size,
-      l.priceRate || '',
-      l.location || '',
-      l.locationLink || '',
-      (l.additionalDetails || '').replace(/\n/g, ' '),
-      l.phoneNumber,
-      l.category
-    ]);
+  const handleExportGoogleSheets = async () => {
+    if (isExporting) return;
+    
+    setIsExporting(true);
 
-    const tsvContent = [
-      headers.join("\t"),
-      ...rows.map(e => e.join("\t"))
-    ].join("\n");
+    try {
+      // 1. Sanitize and Format Data for Google Sheets (TSV)
+      const headers = ["Date", "Who", "Property Type", "Size", "Price/Rate", "Location", "LocationLink", "Additional Details", "Phone", "Category"];
+      const rows = leads.map(l => [
+        sanitizeRupee(l.date),
+        sanitizeRupee(l.who),
+        sanitizeRupee(l.propertyType),
+        sanitizeRupee(l.size),
+        sanitizeRupee(l.priceRate || ''),
+        sanitizeRupee(l.location || ''),
+        sanitizeRupee(l.locationLink || ''),
+        sanitizeRupee((l.additionalDetails || '').replace(/\n/g, ' ')),
+        sanitizeRupee(l.phoneNumber),
+        sanitizeRupee(l.category)
+      ]);
 
-    navigator.clipboard.writeText(tsvContent).then(() => {
-      alert("Formatted for Google Sheets! Open your sheet and press Ctrl+V to paste.");
-    });
+      const tsvContent = [
+        headers.join("\t"),
+        ...rows.map(e => e.join("\t"))
+      ].join("\n");
+
+      // 2. Copy to Clipboard
+      await navigator.clipboard.writeText(tsvContent);
+
+      // 3. Open a New Google Sheet
+      window.open('https://docs.google.com/spreadsheets/u/0/create', '_blank');
+
+      // 4. Notify User
+      alert("✅ Data Copied & New Sheet Opened!\n\nSimply click on cell A1 in the new sheet and press Ctrl+V (or Cmd+V) to paste your extracted leads.");
+
+    } catch (error) {
+      console.error('Google Sheets Export Error:', error);
+      alert('Failed to copy data. Please try again.');
+    } finally {
+      setIsExporting(false);
+    }
   };
 
   return (
@@ -98,10 +122,18 @@ const DataTable: React.FC<DataTableProps> = ({ leads, onUpdateLead, searchTerm, 
             <div className="w-px h-5 bg-slate-200 mx-1"></div>
             <button 
               onClick={handleExportGoogleSheets}
-              className="flex items-center space-x-2 px-4 py-2 hover:bg-blue-50 text-blue-700 rounded-lg transition-all"
+              disabled={isExporting}
+              className={`flex items-center space-x-2 px-4 py-2 hover:bg-blue-50 text-blue-700 rounded-lg transition-all ${isExporting ? 'opacity-50 cursor-not-allowed' : ''}`}
             >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h10V8H7v2zm0 4h10v-2H7v2zm0 4h7v-2H7v2z"/></svg>
-              <span className="text-xs font-black uppercase tracking-widest">Sheets</span>
+              {isExporting ? (
+                <svg className="animate-spin h-4 w-4 text-blue-700" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle>
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
+                </svg>
+              ) : (
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24"><path d="M19 3H5c-1.1 0-2 .9-2 2v14c0 1.1.9 2 2 2h14c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 16H5V5h14v14zM7 10h10V8H7v2zm0 4h10v-2H7v2zm0 4h7v-2H7v2z"/></svg>
+              )}
+              <span className="text-xs font-black uppercase tracking-widest">{isExporting ? 'Exporting...' : 'Sheets'}</span>
             </button>
           </div>
 
